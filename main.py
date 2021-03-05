@@ -3,6 +3,11 @@ from steam.webapi import WebAPI
 from bs4 import BeautifulSoup
 from functools import reduce
 from itertools import chain
+import questionary
+import os.path
+from tomlkit import dumps,loads
+from tabulate import tabulate
+import itertools
 
 def fetch_owned_games(api, steamid):
     return api.IPlayerService.GetOwnedGames(steamid=steamid, include_appinfo=True, include_played_free_games=True, appids_filter=[], include_free_sub=True)['response']
@@ -29,22 +34,93 @@ def fetch_users_libraries(api, users):
 def find_common_games(users):
     return reduce(lambda f1, f2: f1 & f2, map(lambda f: set(map(lambda g: g['appid'], f['games'])), users))
 
+def questionize_friends(friends_names, preselected_names):
+    return map(lambda f: questionary.Choice(title=f['name'], checked=f['name'] in preselected_names), friends_names)
+
+def cache_file_present():
+    if os.path.isfile('.cache.toml'):
+        return True
+    else:
+        return False
+
+def merge_to_cache(dct):
+    if os.path.isfile('.cache.toml'):
+        d = loads(open('.cache.toml').read())
+        d = d | dct
+        d = dumps(d)
+        open('.cache.toml', 'w').write(d)
+    else:
+        d = dumps(dct)
+        open('.cache.toml', 'w').write(d)
+
+def load_from_cache(key):
+    if os.path.isfile('.cache.toml'):
+        d = loads(open('.cache.toml').read())
+        v = d.get(key)
+        if v is None:
+            return ''
+        else:
+            return v
+    else:
+        return ''
+
+def tabulize(users):
+    dct = {}
+    for user in users:
+        for game in user['games']:
+            dct[game['name']] = [] if dct.get(game['name']) is None else dct.get(game['name'])
+            time_played = round(game['playtime_forever'] / 60, 2)
+            dct[game['name']].append(time_played)
+    dct = list(map(list, dct.items()))
+    dct = map(lambda d: [d[0], *d[-1]], dct) # Ugly expansion
+    return dct
+
+def filter_games(users, games_ids):
+    def filter_games_for_user(user):
+        u = user.copy()
+        g = filter(lambda g: g['appid'] in games_ids, u['games'])        
+        u['games'] = g
+        return u
+        
+    return map(filter_games_for_user, users)
+
 if __name__ == "__main__":
+    save = questionary.confirm(default=True, message="Save your input to a cache file?").ask()
+    pre_username = load_from_cache('username')
+    pre_password = load_from_cache('password')
+    pre_selected_friends = load_from_cache('selected_friends')
+    username = questionary.text(default=pre_username, message="Your Steam username?").ask()
+    password = questionary.password(default=pre_password, message="Your Steam password?").ask()
+    if save:
+        merge_to_cache({'username': username, 'password': password})
     cl = SteamClient()
-    cl.cli_login()
+    cl.set_credential_location('.')
+    cl.cli_login(username=username, password=password)
     api = WebAPI(key=fetch_web_api_key(cl))
-    friends = fetch_friends(cl)
-    friends = filter_friends(friends, []) # TODO: actually ask here, for local dev I use static  ist
-    users = chain(friends, [friendify(cl)])
-    users = fetch_users_libraries(api, users)
-    game_ids_set = find_common_games(users)
-    print(game_ids_set)
+    friends = list(fetch_friends(cl)) # we need to listify it, to be able to use it twice. TODO: Investigate how to clone generator/iterator?
+    qfriends = questionize_friends(friends, pre_selected_friends)
+    selected_friends = questionary.checkbox('Select friends to compare',
+                                            choices=qfriends).ask()
+    if save:
+        merge_to_cache({'selected_friends': selected_friends})
+    friends = filter_friends(friends, selected_friends)
+    users = chain([friendify(cl)], friends)
+    users_with_games = list(fetch_users_libraries(api, users))
+    common_games = find_common_games(users_with_games)
+    filtered_users_with_games = list(filter_games(users_with_games, common_games))
+    columns = ['Game name']
+    for u in filtered_users_with_games:
+        columns.append(u['name'])
+    tabulized_games = tabulize(filtered_users_with_games)
+    # TODO: filter/ask for zero-time-games
+    tabulized_games = sorted(tabulized_games, key=lambda r: r[1], reverse=True)
+    print(tabulate(tabulized_games, headers=columns))
 
 # General flow/ TODO:
 # DONE: 0. Get user's web api token
 # DONE: 1. Login to steam client (to get user's friends - haven't found any other way atm)
-# 2. Ask user to select a few friends (use questionary from pypy)
+# DONE: 2. Ask user to select a few friends (use questionary from pypy)
 # DONE: 3. Loop over friends and set-intersect games libraries
-# 4. Present them to the user
+# DONE: 4. Present them to the user with
 # 5. ???
 # 6. PROFIT!

@@ -5,9 +5,12 @@ description = ""
 authors = ["Andriy Mykhaylyk <erp.lsf@gmail.com>"]
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = "~3.9"
 steam = {extras = ["client"], version = "^1.2.0"}
 beautifulsoup4 = "^4.9.3"
+questionary = "^1.9.0"
+tomlkit = "^0.7.0"
+tabulate = "^0.8.9"
 
 [tool.poetry.dev-dependencies]
 ipython = "^7.21.0"
