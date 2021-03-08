@@ -1,0 +1,4 @@
+*.bin
+*.json
+.cache.toml
+__pycache__/

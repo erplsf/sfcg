@@ -7,6 +7,7 @@ import questionary
 import os.path
 from tomlkit import dumps,loads
 from tabulate import tabulate
+from copy import deepcopy
 import itertools
 
 def fetch_owned_games(api, steamid):
@@ -84,6 +85,9 @@ def filter_games(users, games_ids):
         
     return map(filter_games_for_user, users)
 
+def filter_zero_games(tabulized_games):
+    return filter(lambda r: sum(r[1:]) > 0, tabulized_games)
+
 if __name__ == "__main__":
     save = questionary.confirm(default=True, message="Save your input to a cache file?").ask()
     pre_username = load_from_cache('username')
@@ -98,23 +102,39 @@ if __name__ == "__main__":
     cl.cli_login(username=username, password=password)
     api = WebAPI(key=fetch_web_api_key(cl))
     friends = list(fetch_friends(cl)) # we need to listify it, to be able to use it twice. TODO: Investigate how to clone generator/iterator?
-    qfriends = questionize_friends(friends, pre_selected_friends)
-    selected_friends = questionary.checkbox('Select friends to compare',
-                                            choices=qfriends).ask()
-    if save:
-        merge_to_cache({'selected_friends': selected_friends})
-    friends = filter_friends(friends, selected_friends)
-    users = chain([friendify(cl)], friends)
-    users_with_games = list(fetch_users_libraries(api, users))
-    common_games = find_common_games(users_with_games)
-    filtered_users_with_games = list(filter_games(users_with_games, common_games))
-    columns = ['Game name']
-    for u in filtered_users_with_games:
-        columns.append(u['name'])
-    tabulized_games = tabulize(filtered_users_with_games)
-    # TODO: filter/ask for zero-time-games
-    tabulized_games = sorted(tabulized_games, key=lambda r: r[1], reverse=True)
-    print(tabulate(tabulized_games, headers=columns))
+
+    loop = True
+    
+    while loop:
+        pre_selected_friends = load_from_cache('selected_friends')
+        qfriends = list(questionize_friends(deepcopy(friends), pre_selected_friends))
+        selected_friends = questionary.checkbox('Select friends to compare',
+                                                choices=qfriends).ask()
+        
+        if save:
+            merge_to_cache({'selected_friends': selected_friends})
+
+        filtered_friends = list(filter_friends(friends, selected_friends))
+        users = list(chain([friendify(cl)], filtered_friends))
+        users_with_games = list(fetch_users_libraries(api, users))
+        common_games = list(find_common_games(users_with_games))
+        filtered_users_with_games = list(filter_games(users_with_games, common_games))
+        columns = ['Game name']
+        for u in filtered_users_with_games:
+            columns.append(u['name'])
+        tabulized_games = tabulize(filtered_users_with_games)
+        # TODO: filter/ask for zero-time-games
+        if questionary.confirm(default=True, message="Filter out games that every player has zero hours in").ask():
+            tabulized_games = filter_zero_games(tabulized_games)
+        sort_function = questionary.select("What function to use for sorting?",
+                                           choices=['Averaged-player time', 'Owner played time']).ask()
+        if sort_function == 'Owner played time':
+            tabulized_games = sorted(tabulized_games, key=lambda r: r[1], reverse=True)
+        elif sort_function == 'Averaged-player time':
+            tabulized_games = sorted(tabulized_games, key=lambda r: sum(r[1:])/len(r[1:]), reverse=True)
+        print(tabulate(tabulized_games, headers=columns))
+
+        loop = questionary.confirm(default=True, message="Do you want to do a filter/query again?").ask()
 
 # General flow/ TODO:
 # DONE: 0. Get user's web api token
